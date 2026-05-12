@@ -181,7 +181,7 @@ class _AuthScreenState extends State<AuthScreen> {
 }
 
 // ==========================================
-// MÀN HÌNH CHÍNH (DANH SÁCH & TÌM KIẾM)
+// MÀN HÌNH CHÍNH (TÍCH HỢP TAB YÊU THÍCH)
 // ==========================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -192,65 +192,138 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String searchQuery = "";
+  int _selectedIndex = 0; // Biến kiểm soát đang ở Tab nào (0: Khám phá, 1: Yêu thích)
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("SonicStream"),
+        // Tiêu đề thay đổi linh hoạt theo Tab
+        title: Text(_selectedIndex == 0 ? "Khám phá" : "Nhạc Yêu Thích", style: const TextStyle(fontWeight: FontWeight.bold)),
         actions: [
           IconButton(icon: const Icon(Icons.logout), onPressed: () => FirebaseAuth.instance.signOut())
         ],
       ),
       body: Column(
         children: [
-          // THANH TÌM KIẾM
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              onChanged: (value) => setState(() => searchQuery = value),
-              decoration: InputDecoration(
-                hintText: "Tìm bài hát...",
-                prefixIcon: const Icon(Icons.search),
-                filled: true, fillColor: Colors.grey[900],
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(30)),
+          // THANH TÌM KIẾM (Chỉ cho phép hiện diện ở tab Khám phá)
+          if (_selectedIndex == 0)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: TextField(
+                onChanged: (value) => setState(() => searchQuery = value),
+                decoration: InputDecoration(
+                  hintText: "Tìm bài hát...",
+                  prefixIcon: const Icon(Icons.search),
+                  filled: true, fillColor: Colors.grey[900],
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(30)),
+                ),
               ),
             ),
-          ),
-          // DANH SÁCH NHẠC TỪ FIRESTORE
+            
+          // KHU VỰC HIỂN THỊ DANH SÁCH NHẠC (Sẽ tráo đổi qua lại tùy biến _selectedIndex)
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance.collection('songs').snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                
-                var songs = snapshot.data!.docs
-                    .map((doc) => Song.fromFirestore(doc.data() as Map<String, dynamic>, doc.id))
-                    .where((s) => s.title.toLowerCase().contains(searchQuery.toLowerCase()))
-                    .toList();
-
-                return ListView.builder(
-                  itemCount: songs.length,
-                  itemBuilder: (context, index) {
-                    final song = songs[index];
-                    return ListTile(
-                      leading: CachedNetworkImage(imageUrl: song.artUri, width: 50),
-                      title: Text(song.title),
-                      subtitle: Text(song.artist),
-                      onTap: () async {
-                        await AudioManager.instance.initPlaylist(songs);
-                        await AudioManager.instance.player.seek(Duration.zero, index: index);
-                        AudioManager.instance.player.play();
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => const PlayerScreen()));
-                      },
-                    );
-                  },
-                );
-              },
-            ),
+            child: _selectedIndex == 0 ? _buildAllSongs() : _buildFavoriteSongs(),
           ),
         ],
       ),
+      
+      // THANH ĐIỀU HƯỚNG DƯỚI ĐÁY
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        selectedItemColor: Colors.deepPurpleAccent,
+        unselectedItemColor: Colors.grey,
+        onTap: (index) {
+          setState(() {
+            _selectedIndex = index; // Cập nhật lại giao diện khi bấm tab
+          });
+        },
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.music_note), label: "Khám phá"),
+          BottomNavigationBarItem(icon: Icon(Icons.favorite), label: "Yêu thích"),
+        ],
+      ),
+    );
+  }
+
+  // ===============================================
+  // HÀM 1: Lấy toàn bộ nhạc từ kho chung (Tab 0)
+  // ===============================================
+  Widget _buildAllSongs() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('songs').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        
+        var songs = snapshot.data!.docs
+            .map((doc) => Song.fromFirestore(doc.data() as Map<String, dynamic>, doc.id))
+            .where((s) => s.title.toLowerCase().contains(searchQuery.toLowerCase()))
+            .toList();
+
+        return _buildSongListView(songs);
+      },
+    );
+  }
+
+  // ===============================================
+  // HÀM 2: Lấy nhạc Yêu thích của riêng User (Tab 1)
+  // ===============================================
+  Widget _buildFavoriteSongs() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return const Center(child: Text("Vui lòng đăng nhập"));
+
+    return StreamBuilder<QuerySnapshot>(
+      // Chọc đúng vào kho dữ liệu cá nhân của người dùng hiện tại
+      stream: FirebaseFirestore.instance.collection('users').doc(user.uid).collection('favorites').snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        
+        var songs = snapshot.data!.docs
+            .map((doc) => Song.fromFirestore(doc.data() as Map<String, dynamic>, doc.id))
+            .toList();
+
+        // Xử lý "Góc khuất" giao diện trống
+        if (songs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.heart_broken, size: 80, color: Colors.grey[800]),
+                const SizedBox(height: 16),
+                const Text("Chưa có bài hát yêu thích nào!", style: TextStyle(color: Colors.grey, fontSize: 16)),
+              ],
+            ),
+          );
+        }
+
+        return _buildSongListView(songs);
+      },
+    );
+  }
+
+  // ===============================================
+  // HÀM 3: Giao diện vẽ từng dòng bài hát (Dùng chung cho cả 2 Tab)
+  // ===============================================
+  Widget _buildSongListView(List<Song> songs) {
+    return ListView.builder(
+      itemCount: songs.length,
+      itemBuilder: (context, index) {
+        final song = songs[index];
+        return ListTile(
+          leading: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: CachedNetworkImage(imageUrl: song.artUri, width: 50, height: 50, fit: BoxFit.cover),
+          ),
+          title: Text(song.title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          subtitle: Text(song.artist, style: const TextStyle(color: Colors.grey)),
+          onTap: () {
+            Navigator.push(context, MaterialPageRoute(builder: (context) => const PlayerScreen()));
+            AudioManager.instance.initPlaylist(songs, initialIndex: index).then((_) {
+              AudioManager.instance.player.play();
+            });
+          },
+        );
+      },
     );
   }
 }
